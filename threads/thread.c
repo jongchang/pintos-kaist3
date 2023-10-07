@@ -499,6 +499,15 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->nice = NICE_DEFAULT;
     t->recent_cpu = RECENT_CPU_DEFAULT;
 	list_push_back(&all_list, &t->allelem);
+
+	// System Call
+	t->exit_status = 0;
+	t->next_fd = 2;
+
+	sema_init(&t->load_sema, 0);
+	sema_init(&t->exit_sema, 0);
+	sema_init(&t->wait_sema, 0);
+	list_init(&(t->child_list));
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

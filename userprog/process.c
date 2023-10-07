@@ -27,10 +27,13 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+
+// Argument Passing
+void argument_stack(char **parse, int count, void **rsp);
+
 // System Call
 int process_add_file(struct file *f);
 struct file *process_get_file (int fd);
-
 
 /* General process initializer for initd and other process. - initd 및 기타 프로세스의 일반 프로세스 초기화기입니다. */
 static void
@@ -84,7 +87,29 @@ initd (void *f_name) {
  * TID_ERROR if the thread cannot be created. */
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
+	
 	/* Clone current thread to new thread.*/
+
+	// struct thread *cur = thread_current();
+	
+	// memcpy(&cur->parent_if, if_, sizeof(struct intr_frame));
+
+	// tid_t pid = thread_create(name, PRI_DEFAULT, __do_fork, cur);
+	// if (pid == TID_ERROR) {
+	// 	return TID_ERROR;
+	// }
+
+	// struct thread *child = get_child_process(pid);
+
+	// sema_down(&child->load_sema);
+
+	// if (child->exit_status == TID_ERROR)
+	// {
+	// 	sema_up(&child->exit_sema);
+	// 	return TID_ERROR;
+	// }
+
+
 	return thread_create (name,
 			PRI_DEFAULT, __do_fork, thread_current ());
 }
@@ -209,7 +234,7 @@ process_exec (void *f_name) {
 	_if.R.rsi = parse[0];
 
 	// Argument Passing
-	hex_dump (_if.rsp, _if.rsp, USER_STACK - (uint64_t)_if.rsp, true);
+	// hex_dump (_if.rsp, _if.rsp, USER_STACK - (uint64_t)_if.rsp, true);
 
 	palloc_free_page (file_name);
 
@@ -269,11 +294,24 @@ process_wait (tid_t child_tid UNUSED) {
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
 
-	// Argument Passing
-	for (int i = 0; i < 100000000; i++) {
+	// Argument Passing - 임시 처리
+	// for (int i = 0; i < 100000000; i++) {
+	// }
+
+	struct thread *child = get_child_process(child_tid);
+
+	if (child == NULL) {
+		return -1;
 	}
 
-	return -1;
+	sema_down(&child->wait_sema);
+	int exit_status = child->exit_status;
+
+	
+	list_remove(&child->child_elem);
+	sema_up(&child->exit_sema);
+
+	return exit_status;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
