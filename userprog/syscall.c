@@ -10,18 +10,22 @@
 
 // System Call
 #include "filesys/filesys.h"
+#include "filesys/file.h"
 #include "threads/init.h"
 #include "userprog/process.h"
-#include "filesys/file.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
 // System Call
 void check_address (void *addr);
+struct file *process_get_file (int fd);
+int process_add_file(struct file *file);
+void process_close_file(int fd);
+
 void halt (void);
 void exit (int status);
-tid_t fork (const char *thread_name);
+tid_t fork(const char *thread_name, struct intr_frame *f);
 int exec(const char *file);
 int wait (int pid);
 bool create (const char *file, unsigned initial_size);
@@ -81,7 +85,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			exit(f->R.rdi);
 			break;
 		case SYS_FORK:
-			fork(f->R.rdi);
+			fork(f->R.rdi, f);
 		// case SYS_EXEC:
 		// 	exec(f->R.rdi);
 		// case SYS_WAIT:
@@ -124,6 +128,70 @@ check_address (void *addr)
 	}
 }
 
+int 
+process_add_file(struct file *f) {
+	struct thread *curr = thread_current();
+
+	struct file **fdt = curr->fdt;
+	int next_fd = curr->next_fd;
+
+	while (curr < FDCOUNT_LIMIT && fdt[curr->next_fd]) {
+		curr->next_fd++;
+	}
+
+	if (curr->next_fd >= FDCOUNT_LIMIT) {
+		return -1;
+	}
+
+	fdt[curr->next_fd] = f;
+
+	curr->next_fd = next_fd + 1;
+
+	return next_fd;
+}
+
+// 스레드의 파일 객체를 가져온다.
+struct 
+file *process_get_file (int fd) {
+	struct thread *curr = thread_current;
+	struct file **fdt = curr->fdt;
+
+	if (fd < 0 || fd >= FDCOUNT_LIMIT) {
+		return NULL;
+	}
+
+	return fdt[fd];
+}
+
+void
+process_close_file(int fd)
+{
+	struct thread *curr = thread_current();
+	struct file **fdt = curr->fdt;
+
+	if (fd < 0 || fd >= FDCOUNT_LIMIT) {
+		return NULL;
+	}
+
+	fdt[fd] = NULL;
+}
+
+struct 
+thread *get_child_process(int pid)
+{
+	struct thread *cur = thread_current();
+	struct list *child_list = &cur->child_list;
+
+	for (struct list_elem *e = list_begin(child_list); e != list_end(child_list); e = list_next(e)) {
+		struct thread *t = list_entry(e, struct thread, child_elem);
+		if (t->tid == pid) {
+			return t;
+		}
+	}
+	return NULL;
+}
+
+
 void
 halt (void) {
 	power_off ();
@@ -131,7 +199,7 @@ halt (void) {
 
 void
 exit (int status) {
-	struct thread*curr = thread_current();
+	struct thread *curr = thread_current();
 
 	curr->exit_status = status;
 
@@ -142,19 +210,20 @@ exit (int status) {
 
 
 // 프로세스 이름 받아 프로세스 복제 후 번호 반환.
-tid_t 
-fork (const char *thread_name) {
+tid_t
+fork(const char *thread_name, struct intr_frame *f) {
 	// struct file *f = process_get_file(fd);
 
 	// struct thread *curr = thread_current ();
-	// return process_fork(thread_name, f);
-}
+	// return process_fork(thread_name, &curr->parent_if);
 
+	return process_fork(thread_name, f);
+}
 
 int 
 exec (const char *file) {
 	// check_address(file);
-	// int size = strnlen(file) +1;
+	// int size = strlen(file) + 1;
 	// char *fn_copy = palloc_get_page(PAL_ZERO);
 
 	// if (fn_copy == NULL) {
@@ -167,8 +236,8 @@ exec (const char *file) {
 	// 	return -1;
 	// }
 
-	// NOT_REACHED ();
-	// return 0;
+	NOT_REACHED ();
+	return 0;
 
 	////////////////////////////////////////
 
@@ -202,23 +271,23 @@ remove (const char *file) {
 	return filesys_remove(file);
 }
 
-// int 
-// open (const char *file_name) {
-// 	check_address(file_name);
-// 	struct file *file = filesys_open(file_name);
+int 
+open (const char *file_name) {
+	check_address(file_name);
+	struct file *file = filesys_open(file_name);
 
-// 	if (file == NULL) {
-// 			return -1;
-// 	}
+	if (file == NULL) {
+			return -1;
+	}
 
-// 	int fd = process_add_file(file);
+	int fd = process_add_file(file);
 
-// 	if (fd == -1) {
-// 		file_close (file);
-// 	}
+	if (fd == -1) {
+		file_close (file);
+	}
 
-// 	return fd;
-// }
+	return fd;
+}
 
 // int 
 // filesize (int fd) {
@@ -231,73 +300,73 @@ remove (const char *file) {
 // 	return file_length(file);
 // }
 
-// int
-// read (int fd, void *buffer, unsigned size) {
-// 	check_address(buffer);
+int
+read (int fd, void *buffer, unsigned size) {
+	check_address(buffer);
 	
 
-// 	char *ptr = (char *)buffer;
-// 	int bytes_read = 0;
+	char *ptr = (char *)buffer;
+	int bytes_read = 0;
 
-// 	lock_acquire(&filesys_done);
+	lock_acquire(&filesys_done);
 
-// 	if (fd == STDIN_FILENO)
-// 	{
-// 		for (int i = 0; i < size; i++)
-// 		{
-// 			char ch = input_getc();
-// 			bytes_read++;
-// 		}
-// 		lock_release(&filesys_done);
-// 	}
-// 	else
-// 	{
-// 		if (fd < 2) {
-// 			lock_release(&filesys_done);
-// 			return -1;
-// 		}
+	if (fd == STDIN_FILENO)
+	{
+		for (int i = 0; i < size; i++)
+		{
+			char ch = input_getc();
+			bytes_read++;
+		}
+		lock_release(&filesys_done);
+	}
+	else
+	{
+		if (fd < 2) {
+			lock_release(&filesys_done);
+			return -1;
+		}
 
-// 		struct file *file = process_get_file(fd);
+		struct file *file = process_get_file(fd);
 		
-// 		if (file == NULL) {
-// 			lock_release(&filesys_done);
-// 			return -1;
-// 		}
+		if (file == NULL) {
+			lock_release(&filesys_done);
+			return -1;
+		}
 
-// 		lock_acquire(&filesys_done);
-// 		bytes_read = file_read(file, buffer, size);
-// 		lock_release(&filesys_done);
-// 	}
-// 	return bytes_read;
-// }
+		lock_acquire(&filesys_done);
+		bytes_read = file_read(file, buffer, size);
+		lock_release(&filesys_done);
+	}
+	return bytes_read;
+}
 
-// int 
-// write(int fd, const void *buffer, unsigned size) {
-// 	check_address (buffer);
-// 	lock_acquire(&filesys_done);
+int 
+write(int fd, const void *buffer, unsigned size) {
+	check_address (buffer);
+	lock_acquire(&filesys_done);
 
-// 	int bytes_write = 0;
-// 	if (fd == STDOUT_FILENO) {
-// 		putbuf(buffer, size);
-// 	}
-// 	else {
-// 		if (fd < 2) {
-// 			lock_release(&filesys_done);
-// 			return -1;
-// 		}
+	int bytes_write = 0;
+	if (fd == STDOUT_FILENO) {
+		putbuf(buffer, size);
+	}
+	else {
+		if (fd < 2) {
+			lock_release(&filesys_done);
+			return -1;
+		}
 
-// 		struct file *file = process_get_file(fd);
+		struct file *file = process_get_file(fd);
 
-// 		if (file == NULL) {
-// 			lock_release(&filesys_done);
-// 			return -1;
-// 		}
-// 		bytes_write = file_write(file, buffer, size);
-// 		lock_release(&filesys_done);
-// 	}
+		if (file == NULL) {
+			lock_release(&filesys_done);
+			return -1;
+		}
+		bytes_write = file_write(file, buffer, size);
+		lock_release(&filesys_done);
+	}
 
-// 	return bytes_write;
-// }
+	return bytes_write;
+}
 
 
 void 

@@ -90,28 +90,29 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	
 	/* Clone current thread to new thread.*/
 
-	// struct thread *cur = thread_current();
+	struct thread *cur = thread_current();
 	
 	// memcpy(&cur->parent_if, if_, sizeof(struct intr_frame));
 
-	// tid_t pid = thread_create(name, PRI_DEFAULT, __do_fork, cur);
-	// if (pid == TID_ERROR) {
-	// 	return TID_ERROR;
-	// }
+	tid_t pid = thread_create(name, PRI_DEFAULT, __do_fork, cur);
+	if (pid == TID_ERROR) {
+		return TID_ERROR;
+	}
 
-	// struct thread *child = get_child_process(pid);
+	struct thread *child = get_child_process(pid);
 
-	// sema_down(&child->load_sema);
+	sema_down(&child->load_sema);
 
-	// if (child->exit_status == TID_ERROR)
-	// {
-	// 	sema_up(&child->exit_sema);
-	// 	return TID_ERROR;
-	// }
+	if (child->exit_status == TID_ERROR)
+	{
+		sema_up(&child->exit_sema);
+		return TID_ERROR;
+	}
 
+	return pid;
 
-	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+	// return thread_create (name,
+	// 		PRI_DEFAULT, __do_fork, thread_current ());
 }
 
 #ifndef VM
@@ -161,6 +162,7 @@ __do_fork (void *aux) {
 
 	/* 1. Read the cpu context to local stack. */
 	memcpy (&if_, parent_if, sizeof (struct intr_frame));
+	if_.R.rax = 0;
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
@@ -743,38 +745,6 @@ setup_stack (struct intr_frame *if_) {
 	/* TODO: Your code goes here */
 
 	return success;
-}
-
-// System Call
-// 파일 디스크립터 생성
-int 
-process_add_file(struct file *f) {
-	struct thread *curr = thread_current();
-
-	struct file **fdt = curr->fdt;
-	int next_fd = curr->next_fd;
-
-	if (next_fd >= 128) {
-		return -1;
-	}
-
-	fdt[next_fd] = f;
-
-	curr->next_fd = next_fd + 1;
-
-	return next_fd;
-}
-
-struct
-file *process_get_file (int fd) {
-	struct thread *curr = thread_current;
-	struct file **fdt = curr->fdt;
-
-	if (fd < 0 || fd > 127) {
-		return NULL;
-	}
-
-	return fdt[fd];
 }
 
 #endif /* VM */

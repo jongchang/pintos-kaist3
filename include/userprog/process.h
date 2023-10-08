@@ -16,5 +16,6 @@ void argument_stack(char **parse, int count, void **rsp);
 // System Call
 int process_add_file (struct file *f);
 struct file *process_get_file (int fd);
+struct thread * get_child(int pid);
 
 #endif /* userprog/process.h */
