@@ -12,13 +12,22 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "threads/init.h"
+#include "threads/synch.h"
+#include "threads/palloc.h"
 #include "userprog/process.h"
+
+struct lock filesys_lock;
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
 // System Call
 void check_address (void *addr);
+
+static struct file *find_file_by_fd(int fd);
+int add_file_to_fdt(struct file *file);
+void remove_file_from_fdt(int fd);
+
 struct file *process_get_file (int fd);
 int process_add_file(struct file *file);
 void process_close_file(int fd);
@@ -30,7 +39,7 @@ int exec(const char *file);
 int wait (int pid);
 bool create (const char *file, unsigned initial_size);
 bool remove (const char *file);
-int open (const char *file);
+int open(const char *file);
 int filesize (int fd);
 int read (int fd, void *buffer, unsigned size);
 int write(int fd, const void *buffer, unsigned size);
@@ -59,6 +68,9 @@ syscall_init (void) {
 	write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48  |
 			((uint64_t)SEL_KCSEG) << 32);
 	write_msr(MSR_LSTAR, (uint64_t) syscall_entry);
+
+	// System Call
+	lock_init(&filesys_lock);
 
 	/* The interrupt service rountine should not serve any interrupts until the syscall_entry swaps the userland stack to the kernel mode stack. Therefore, we masked the FLAG_FL.
 	 * syscall_entry가 사용자 랜드 스택을 커널 모드 스택으로 스왑할 때까지 
@@ -96,20 +108,27 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_REMOVE:
 			f->R.rax = remove(f->R.rdi);
 			break;
-		// case SYS_OPEN:
-		// 	open(f->R.rdi);
-		// case SYS_FILESIZE:
-		// 	filesize(f->R.rdi);
-		// case SYS_READ:
-		// 	read(f->R.rdi);
-		// case SYS_WRITE:
-		// 	write(f->R.rdi);
-		// case SYS_SEEK:
-		// 	seek(f->R.rdi);
-		// case SYS_TELL:
-		// 	tell(f->R.rdi);
-		// case SYS_CLOSE:
-		// 	close(f->R.rdi);
+		case SYS_OPEN:
+			f->R.rax = open(f->R.rdi);
+        	break;
+		case SYS_FILESIZE:
+        f->R.rax = filesize(f->R.rdi);
+        	break;
+		case SYS_READ:
+			f->R.rax = read(f->R.rdi, f->R.rsi, f->R.rdx);
+			break;
+		case SYS_WRITE:
+			f->R.rax = write(f->R.rdi, f->R.rsi, f->R.rdx);
+			break;
+		case SYS_SEEK:
+			seek(f->R.rdi, f->R.rsi);
+			break;
+		case SYS_TELL:
+			f->R.rax = tell(f->R.rdi);
+			break;
+		case SYS_CLOSE:
+			close(f->R.rdi);
+			break;
 		default:
 			exit(-1);
 			break;
@@ -120,7 +139,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 }
 
 void
-check_address (void *addr)	
+check_address (void *addr)
 {
 	struct thread *cur = thread_current ();
 	if (addr == NULL || !(is_user_vaddr (addr)) || pml4_get_page(cur->pml4, addr) == NULL) {
@@ -153,7 +172,7 @@ process_add_file(struct file *f) {
 // 스레드의 파일 객체를 가져온다.
 struct 
 file *process_get_file (int fd) {
-	struct thread *curr = thread_current;
+	struct thread *curr = thread_current();
 	struct file **fdt = curr->fdt;
 
 	if (fd < 0 || fd >= FDCOUNT_LIMIT) {
@@ -272,72 +291,67 @@ remove (const char *file) {
 }
 
 int 
-open (const char *file_name) {
-	check_address(file_name);
-	struct file *file = filesys_open(file_name);
+open(const char *file) {
+    check_address(file);
+    struct file *open_file = filesys_open(file);
 
-	if (file == NULL) {
-			return -1;
-	}
+    if (open_file == NULL)
+    {
+        return -1;
+    }
+    int fd = add_file_to_fdt(open_file);
 
-	int fd = process_add_file(file);
-
-	if (fd == -1) {
-		file_close (file);
-	}
-
-	return fd;
+    if (fd == -1)
+    {
+        file_close(open_file);
+    }
+    return fd;
 }
 
-// int 
-// filesize (int fd) {
-// 	struct file *file = process_get_file(fd);
-
-// 	if (file == NULL) {
-// 		return -1;
-// 	}
-
-// 	return file_length(file);
-// }
+int 
+filesize (int fd) {
+    struct file *open_file = find_file_by_fd(fd);
+    if (open_file == NULL)
+    {
+        return -1;
+    }
+    return file_length(open_file);
+}
 
 int
 read (int fd, void *buffer, unsigned size) {
-	check_address(buffer);
-	
-
-	char *ptr = (char *)buffer;
-	int bytes_read = 0;
-
-	lock_acquire(&filesys_done);
-
-	if (fd == STDIN_FILENO)
-	{
-		for (int i = 0; i < size; i++)
-		{
-			char ch = input_getc();
-			bytes_read++;
-		}
-		lock_release(&filesys_done);
-	}
-	else
-	{
-		if (fd < 2) {
-			lock_release(&filesys_done);
-			return -1;
-		}
-
-		struct file *file = process_get_file(fd);
-		
-		if (file == NULL) {
-			lock_release(&filesys_done);
-			return -1;
-		}
-
-		lock_acquire(&filesys_done);
-		bytes_read = file_read(file, buffer, size);
-		lock_release(&filesys_done);
-	}
-	return bytes_read;
+    check_address(buffer);
+    off_t read_byte;
+    uint8_t *read_buffer = buffer;
+    if (fd == 0)
+    {
+        char key;
+        for (read_byte = 0; read_byte < size; read_byte++)
+        {
+            key = input_getc();
+            *read_buffer++ = key;
+            if (key == '\0')
+            {
+                break;
+            }
+        }
+    }
+    else if (fd == 1)
+    {
+        return -1;
+    }
+    else
+    {
+        struct file *read_file = find_file_by_fd(fd);
+        if (read_file == NULL)
+        {
+            return -1;
+        }
+        lock_acquire(&filesys_lock);
+        read_byte = file_read(read_file, buffer, size);
+        lock_release(&filesys_lock);
+    }
+    return read_byte;
 }
 
 int 
@@ -378,38 +392,72 @@ seek(int fd, unsigned position) {
 		file_seek(f, position);
 	}
 
-	// struct file *file = process_add_file(fd);
-	// if (file == NULL) {
-	// 	return;
-	// }
-
 }
 
 // // FILE의 현재 위치를 파일 시작부터 바이트 오프셋으로 반환
 unsigned
 tell (int fd) {
 	struct file *f = process_get_file(fd);
+	
 	if (fd < 2) {
 		return;
 	}
-	// struct file *file = process_get_file(fd);
-	// if (file == NULL) {
-	// 	return ;
-	// }
+
 	return file_tell(f); // /filesys/file.c의 file_tell (struct file *file) 참조
 }
 
-// void
-// close (int fd) {
-// 	if (fd < 2)
-// 		return;
+void
+close (int fd) {
+	if (fd < 2)
+		return;
 
-// 	struct file *file = process_get_file(fd);
+	struct file *file = process_get_file(fd);
 	
-// 	if (file == NULL) {
-// 		return;
-// 	}
+	if (file == NULL) {
+		return;
+	}
 
-// 	file_close(file);
-// 	process_close_file(fd);
-// }
+	file_close(file);
+	process_close_file(fd);
+}
+
+static struct file *find_file_by_fd(int fd)
+{
+    struct thread *cur = thread_current();
+    if (fd < 0 || fd >= FDCOUNT_LIMIT)
+    {
+        return NULL;
+    }
+    return cur->fd_table[fd];
+}
+
+int add_file_to_fdt(struct file *file)
+{
+    struct thread *cur = thread_current();
+    struct file **fdt = cur->fd_table;
+
+    // Find open spot from the front
+    //  fd 위치가 제한 범위 넘지않고, fd table의 인덱스 위치와 일치한다면
+    while (cur->fd_idx < FDCOUNT_LIMIT && fdt[cur->fd_idx])
+    {
+        cur->fd_idx++;
+    }
+
+    // error - fd table full
+    if (cur->fd_idx >= FDCOUNT_LIMIT)
+        return -1;
+
+    fdt[cur->fd_idx] = file;
+    return cur->fd_idx;
+}
+
+void remove_file_from_fdt(int fd)
+{
+    struct thread *cur = thread_current();
+
+    // error : invalid fd
+    if (fd < 0 || fd >= FDCOUNT_LIMIT)
+        return;
+
+    cur->fd_table[fd] = NULL;
+}

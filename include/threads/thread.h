@@ -125,9 +125,13 @@ struct thread {
 	struct file **fdt[128];
 	int next_fd;
 
-	struct intr_frame parent_if;
 	struct list child_list;
 	struct list_elem child_elem;
+
+	struct intr_frame parent_if;
+
+	struct file **fd_table;
+	int fd_idx;
 
 	struct semaphore load_sema;
 	struct semaphore exit_sema;
