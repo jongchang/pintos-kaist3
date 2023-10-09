@@ -210,6 +210,19 @@ thread_create (const char *name, int priority,
 	init_thread (t, name, priority); // thread 구조체 초기화
 	tid = t->tid = allocate_tid (); // tid 할당 
 
+	// System Call
+	struct thread *curr = thread_current();
+	list_push_back(&curr->child_list, &t->child_elem);
+	// File Descriptor Table 메모리 할당 // palloc이나 malloc?
+	t->fd_table = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
+	if(t->fd_table == NULL)
+		return TID_ERROR;
+	t->fd_idx = 2; // 0 : stdin, 1: stdout
+
+	// /* Extra */
+	t->fd_table[0] = 1; // dummy value? 
+	t->fd_table[1] = 2;
+
 	/* Call the kernel_thread if it scheduled. Note) rdi is 1st argument, and rsi is 2nd argument.
 	 * 예정된 경우 kernel_thread를 호출합니다. 참고) rdi는 첫 번째 인수이고 rsi는 두 번째 인수입니다. */
 	t->tf.rip = (uintptr_t) kernel_thread; // 쓰레드의 명령 포인터 레지스터(rip)를 커널 쓰레드의 함수의 주소로 설정(새 쓰레드으가 실행을 시작할 함수)
@@ -504,9 +517,12 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->exit_status = 0;
 	t->next_fd = 2;
 
-	sema_init(&t->load_sema, 0);
-	sema_init(&t->exit_sema, 0);
+	// sema_init(&t->load_sema, 0);
+	// sema_init(&t->exit_sema, 0);
 	sema_init(&t->wait_sema, 0);
+	sema_init(&t->free_sema, 0);
+	sema_init(&t->fork_sema, 0);
+
 	list_init(&(t->child_list));
 }
 

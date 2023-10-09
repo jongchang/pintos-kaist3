@@ -15,6 +15,9 @@
 // System Call
 #include "threads/synch.h"
 
+#define FDT_PAGES 3
+#define FDCOUNT_LIMIT FDT_PAGES * (1<<9)
+
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -125,17 +128,19 @@ struct thread {
 	struct file **fdt[128];
 	int next_fd;
 
-	struct list child_list;
-	struct list_elem child_elem;
+	struct list child_list;             /* 자식 프로세스를 담아줄 리스트*/ //변경사항
+	struct list_elem child_elem;		/* child_list 에 담아줄 elem */ // 변경사항
 
-	struct intr_frame parent_if;
+	struct semaphore wait_sema;			/* wait_sema 를 이용하여 자식 프로세스가 종료할때까지 대기함. 종료 상태를 저장 */
 
-	struct file **fd_table;
-	int fd_idx;
+	struct intr_frame parent_if;         /* 유저 스택의 정보를 인터럽트 프레임 안에 넣어서, 커널 스택으로 넘겨주기 위함 */ //변경사항 - 자식에게 넘겨줄 intr_frame
+	struct semaphore fork_sema;          /* 자식 프로세스를 정상적으로 로드하기 위해, 부모 프로세스가 sema_down/up하게 되는 세마포어 */ //fork가 완료될때 까지 부모가 기다리게 하는 forksema
+	struct semaphore free_sema;			 /*자식 프로세스 종료상태를 부모가 받을때까지 종료를 대기하게 하는 free_sema */
 
-	struct semaphore load_sema;
-	struct semaphore exit_sema;
-	struct semaphore wait_sema;
+	// 변경사항
+	/* file descriptor 관련 추가 */
+	struct file **fd_table;             /* File Descriptor Table (FD Table) */
+	int fd_idx;  
 
 	struct file *running;
 

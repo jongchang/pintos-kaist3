@@ -11,10 +11,11 @@
 // System Call
 #include "filesys/filesys.h"
 #include "filesys/file.h"
-#include "threads/init.h"
-#include "threads/synch.h"
+#include <list.h>
 #include "threads/palloc.h"
+#include "threads/vaddr.h"
 #include "userprog/process.h"
+#include "threads/synch.h"
 
 struct lock filesys_lock;
 
@@ -22,30 +23,30 @@ void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
 // System Call
-void check_address (void *addr);
-
-static struct file *find_file_by_fd(int fd);
-int add_file_to_fdt(struct file *file);
-void remove_file_from_fdt(int fd);
-
-struct file *process_get_file (int fd);
-int process_add_file(struct file *file);
-void process_close_file(int fd);
-
 void halt (void);
 void exit (int status);
-tid_t fork(const char *thread_name, struct intr_frame *f);
-int exec(const char *file);
-int wait (int pid);
-bool create (const char *file, unsigned initial_size);
-bool remove (const char *file);
+bool create(const char *file, unsigned initial_size);
+bool remove(const char *file);
 int open(const char *file);
-int filesize (int fd);
-int read (int fd, void *buffer, unsigned size);
+int filesize(int fd);
+int read(int fd, void *buffer, unsigned size);
 int write(int fd, const void *buffer, unsigned size);
+int _write (int fd UNUSED, const void *buffer, unsigned size);
 void seek(int fd, unsigned position);
-unsigned tell (int fd);
-void close (int fd);
+unsigned tell(int fd);
+void close(int fd);
+tid_t fork (const char *thread_name, struct intr_frame *f);
+int exec (const char *file_name);
+
+/* syscall helper functions */
+void check_address(const uint64_t*);struct file *running;
+static struct file *process_get_file(int fd);
+struct file *process_get_file (int fd);
+void process_close_file(int fd);
+
+/* Project2-extra */
+const int STDIN = 1;
+const int STDOUT = 2;
 
 /* System call.
  *
@@ -83,53 +84,52 @@ syscall_init (void) {
 void
 syscall_handler (struct intr_frame *f UNUSED) {
 
-	// System Call
-	// 넘겨 받을 포인터 변수를 설정한다.
-	int call_n = f->R.rax;
-
-	// 받은 숫자에 맞춰서 case문을 통해 해당 시스템 콜을 호출해줘야 한다.
-	switch (call_n) 
-	{
-		case SYS_HALT:
+	int syscall_num = f->R.rax; // rax: system call number
+	switch(syscall_num){
+		case SYS_HALT:                   /* Halt the operating system. */
 			halt();
 			break;
-		case SYS_EXIT:
+		case SYS_EXIT:                   /* Terminate this process. */
 			exit(f->R.rdi);
+			break;    
+		case SYS_FORK:                   /* Clone current process. */
+			f->R.rax = fork(f->R.rdi, f);
 			break;
-		case SYS_FORK:
-			fork(f->R.rdi, f);
-		// case SYS_EXEC:
-		// 	exec(f->R.rdi);
-		// case SYS_WAIT:
-		// 	wait(f->R.rdi);
-		case SYS_CREATE:
+		case SYS_EXEC:                   /* Switch current process. */
+			if (exec(f->R.rdi) == -1)
+				exit(-1);
+			break;
+		case SYS_WAIT:                   /* Wait for a child process to die. */
+			f->R.rax = wait(f->R.rdi);
+			break;
+		case SYS_CREATE:                 /* Create a file. */
 			f->R.rax = create(f->R.rdi, f->R.rsi);
 			break;
-		case SYS_REMOVE:
+		case SYS_REMOVE:                 /* Delete a file. */
 			f->R.rax = remove(f->R.rdi);
 			break;
-		case SYS_OPEN:
+		case SYS_OPEN:                   /* Open a file. */
 			f->R.rax = open(f->R.rdi);
-        	break;
-		case SYS_FILESIZE:
-        f->R.rax = filesize(f->R.rdi);
-        	break;
-		case SYS_READ:
+			break;
+		case SYS_FILESIZE:               /* Obtain a file's size. */
+			f->R.rax = filesize(f->R.rdi);
+			break;
+		case SYS_READ:                   /* Read from a file. */
 			f->R.rax = read(f->R.rdi, f->R.rsi, f->R.rdx);
 			break;
-		case SYS_WRITE:
+		case SYS_WRITE:                  /* Write to a file. */
 			f->R.rax = write(f->R.rdi, f->R.rsi, f->R.rdx);
 			break;
-		case SYS_SEEK:
+		case SYS_SEEK:                   /* Change position in a file. */
 			seek(f->R.rdi, f->R.rsi);
 			break;
-		case SYS_TELL:
+		case SYS_TELL:                   /* Report current position in a file. */
 			f->R.rax = tell(f->R.rdi);
 			break;
-		case SYS_CLOSE:
+		case SYS_CLOSE:					 /* Close a file. */
 			close(f->R.rdi);
 			break;
-		default:
+		default:						 /* call thread_exit() ? */
 			exit(-1);
 			break;
 	}
@@ -137,327 +137,185 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	// printf ("system call!\n");
 	// thread_exit ();
 }
-
-void
-check_address (void *addr)
-{
-	struct thread *cur = thread_current ();
-	if (addr == NULL || !(is_user_vaddr (addr)) || pml4_get_page(cur->pml4, addr) == NULL) {
-		exit(-1);
-	}
+void halt(void){
+	power_off(); // init.c의 power_off 활용
 }
 
-int 
-process_add_file(struct file *f) {
-	struct thread *curr = thread_current();
-
-	struct file **fdt = curr->fdt;
-	int next_fd = curr->next_fd;
-
-	while (curr < FDCOUNT_LIMIT && fdt[curr->next_fd]) {
-		curr->next_fd++;
-	}
-
-	if (curr->next_fd >= FDCOUNT_LIMIT) {
-		return -1;
-	}
-
-	fdt[curr->next_fd] = f;
-
-	curr->next_fd = next_fd + 1;
-
-	return next_fd;
-}
-
-// 스레드의 파일 객체를 가져온다.
-struct 
-file *process_get_file (int fd) {
-	struct thread *curr = thread_current();
-	struct file **fdt = curr->fdt;
-
-	if (fd < 0 || fd >= FDCOUNT_LIMIT) {
-		return NULL;
-	}
-
-	return fdt[fd];
-}
-
-void
-process_close_file(int fd)
-{
-	struct thread *curr = thread_current();
-	struct file **fdt = curr->fdt;
-
-	if (fd < 0 || fd >= FDCOUNT_LIMIT) {
-		return NULL;
-	}
-
-	fdt[fd] = NULL;
-}
-
-struct 
-thread *get_child_process(int pid)
-{
-	struct thread *cur = thread_current();
-	struct list *child_list = &cur->child_list;
-
-	for (struct list_elem *e = list_begin(child_list); e != list_end(child_list); e = list_next(e)) {
-		struct thread *t = list_entry(e, struct thread, child_elem);
-		if (t->tid == pid) {
-			return t;
-		}
-	}
-	return NULL;
-}
-
-
-void
-halt (void) {
-	power_off ();
-}
-
-void
-exit (int status) {
-	struct thread *curr = thread_current();
-
+/* terminate this process */
+void exit(int status){
+	struct thread *curr = thread_current(); // 실행 중인 스레드 구조체 가져오기
 	curr->exit_status = status;
-
-	// thread_name() - thread.c 파일에 curr->name을 반환하는 함수 
-	printf("%s: exit(%d)\n", thread_name(), status);
-	thread_exit();
+	printf("%s: exit(%d)\n", thread_name(), status); // if status != 0, error
+	thread_exit(); // 스레드 종료
 }
 
-
-// 프로세스 이름 받아 프로세스 복제 후 번호 반환.
-tid_t
-fork(const char *thread_name, struct intr_frame *f) {
-	// struct file *f = process_get_file(fd);
-
-	// struct thread *curr = thread_current ();
-	// return process_fork(thread_name, &curr->parent_if);
-
+/* Clone current process. */
+tid_t fork (const char *thread_name, struct intr_frame *f){
+	/* create new process, which is the clone of current process with the name THREAD_NAME*/
 	return process_fork(thread_name, f);
+	/* must return pid of the child process */
 }
 
-int 
-exec (const char *file) {
-	// check_address(file);
-	// int size = strlen(file) + 1;
-	// char *fn_copy = palloc_get_page(PAL_ZERO);
+int exec (const char *file){
+	check_address(file);
+	int size = strlen(file) + 1;
+	char *fn_copy = palloc_get_page(PAL_ZERO);
 
-	// if (fn_copy == NULL) {
-	// 	exit(-1);
-	// }
+	if(fn_copy==NULL)
+		exit(-1);
+	//palloc 쓰는 이유 좀 더 고민해보기(아마 paging과 연관)
+	strlcpy(fn_copy, file, size);
+	if (process_exec(fn_copy) == -1)
+		return -1;
 
-	// strlcpy (fn_copy, file, size);
-
-	// if (process_exec (fn_copy) == -1) {
-	// 	return -1;
-	// }
-
-	NOT_REACHED ();
+	NOT_REACHED();
 	return 0;
-
-	////////////////////////////////////////
-
-	// char *cmd_line_copy;
-	// cmd_line_copy = palloc_get_page(0);
-	
-	// if (cmd_line_copy == NULL) {
-	// 	exit(-1);
-	// }
-	// strlcpy(cmd_line_copy, cmd_line, PGSIZE);
-
-	// if (process_exec(cmd_line_copy) == -1) {
-	// 	exit(-1);
-	// }
 }
 
-int 
-wait (int pid) {
-	return process_wait(pid);
+/* Wait for a child process to die. */
+int wait(tid_t pid){
+	process_wait(pid);
 }
 
-bool
-create (const char *file, unsigned initial_size) {
+ /* Create a file. */
+bool create(const char *file, unsigned initial_size){
+	check_address(file); // 포인터가 가리키는 주소가 유저영역의 주소인지 확인
+	return filesys_create(file, initial_size); // 파일 이름 & 크기에 해당하는 파일 생성
+}
+
+ /* Delete a file. */
+bool remove(const char *file){
+	check_address(file); // 포인터가 가리키는 주소가 유저영역의 주소인지 확인
+	return filesys_remove(file); // 파일 이름에 해당하는 파일을 제거
+}
+
+int open (const char *file){
 	check_address(file);
-	return filesys_create(file, initial_size);
-}
-
-bool 
-remove (const char *file) {
-	check_address(file);
-	return filesys_remove(file);
-}
-
-int 
-open(const char *file) {
-    check_address(file);
-    struct file *open_file = filesys_open(file);
-
-    if (open_file == NULL)
-    {
-        return -1;
-    }
-    int fd = add_file_to_fdt(open_file);
-
-    if (fd == -1)
-    {
-        file_close(open_file);
-    }
-    return fd;
-}
-
-int 
-filesize (int fd) {
-    struct file *open_file = find_file_by_fd(fd);
-    if (open_file == NULL)
-    {
-        return -1;
-    }
-    return file_length(open_file);
-}
-
-int
-read (int fd, void *buffer, unsigned size) {
-    check_address(buffer);
-    off_t read_byte;
-    uint8_t *read_buffer = buffer;
-    if (fd == 0)
-    {
-        char key;
-        for (read_byte = 0; read_byte < size; read_byte++)
-        {
-            key = input_getc();
-            *read_buffer++ = key;
-            if (key == '\0')
-            {
-                break;
-            }
-        }
-    }
-    else if (fd == 1)
-    {
-        return -1;
-    }
-    else
-    {
-        struct file *read_file = find_file_by_fd(fd);
-        if (read_file == NULL)
-        {
-            return -1;
-        }
-        lock_acquire(&filesys_lock);
-        read_byte = file_read(read_file, buffer, size);
-        lock_release(&filesys_lock);
-    }
-    return read_byte;
-}
-
-int 
-write(int fd, const void *buffer, unsigned size) {
-	check_address (buffer);
-	lock_acquire(&filesys_done);
-
-	int bytes_write = 0;
-	if (fd == STDOUT_FILENO) {
-		putbuf(buffer, size);
-	}
-	else {
-		if (fd < 2) {
-			lock_release(&filesys_done);
-			return -1;
-		}
-
-		struct file *file = process_get_file(fd);
-
-		if (file == NULL) {
-			lock_release(&filesys_done);
-			return -1;
-		}
-		bytes_write = file_write(file, buffer, size);
-		lock_release(&filesys_done);
-	}
-
-	return bytes_write;
+	lock_acquire(&filesys_lock);
+	struct file *f = filesys_open(file); // 파일을 오픈
+	if (f == NULL)
+		return -1;
+	int fd = process_add_file(f);
+	if (fd == -1)
+		file_close(f);
+	lock_release(&filesys_lock);
+	return fd;
 }
 
 
-void 
-seek(int fd, unsigned position) {
+int filesize (int fd){
+	struct file *f = process_get_file(fd); // fd를 이용해서 파일 객체 검색
+	if (f == NULL) return -1;
+	return file_length(f);
+}
+
+/* 수정완료 */
+int read (int fd, void *buffer, unsigned size){
+	check_address(buffer);
+	int readsize;
 	struct file *f = process_get_file(fd);
 
-	if (fd > 2) {
-		// /filesys/file.c 의 file_seek 함수 참조
+	if (f == NULL) return -1;
+	if (f == STDOUT) return -1;
+
+	if (f == STDIN){
+		int i;
+		unsigned char *buf = buffer;
+
+		for (i=0; i<size; i++){
+			char c = input_getc();
+			*buf++ = c;
+			if (c == '\0')
+				break;
+		}
+		readsize =  i;
+	}
+	else{
+		lock_acquire(&filesys_lock); // 파일에 동시접근 일어날 수 있으므로 lock 사용
+		readsize = file_read(f, buffer, size);
+		lock_release(&filesys_lock);
+	}
+	return readsize;
+}
+
+/* 수정완료 */
+int write (int fd, const void *buffer, unsigned size){ // length->size로 수정 (맞춰수정?)
+	check_address(buffer);
+	int writesize;
+	struct file *f = process_get_file(fd);
+	if (f == NULL) return -1;
+	if (f == STDIN) return -1;
+
+
+	if (f == STDOUT){
+		putbuf(buffer, size);// buffer에 들은 size만큼을, 한 번의 호출로 작성해준다.
+		writesize = size;
+	}
+	else{
+		lock_acquire(&filesys_lock); // 파일에 동시접근 일어날 수 있으므로 lock 사용
+		writesize = file_write(f, buffer, size);
+		lock_release(&filesys_lock);
+	}
+	return writesize;
+}
+
+void seek (int fd, unsigned position){
+	struct file *f = process_get_file(fd);
+	if (f > 2)
 		file_seek(f, position);
-	}
-
 }
 
-// // FILE의 현재 위치를 파일 시작부터 바이트 오프셋으로 반환
-unsigned
-tell (int fd) {
+unsigned tell (int fd){
 	struct file *f = process_get_file(fd);
-	
-	if (fd < 2) {
-		return;
-	}
-
-	return file_tell(f); // /filesys/file.c의 file_tell (struct file *file) 참조
+	if (f > 2)
+		return file_tell(f);
 }
 
-void
-close (int fd) {
-	if (fd < 2)
+void close (int fd){
+	struct file *f = process_get_file(fd);
+	if(f == NULL)
 		return;
-
-	struct file *file = process_get_file(fd);
-	
-	if (file == NULL) {
+	/* 여긴 그냥 fd < 2로도 가능할듯 */
+	if(fd < 2 || f <= 2)
 		return;
-	}
-
-	file_close(file);
 	process_close_file(fd);
+	file_close(f);
 }
 
-static struct file *find_file_by_fd(int fd)
-{
-    struct thread *cur = thread_current();
-    if (fd < 0 || fd >= FDCOUNT_LIMIT)
-    {
-        return NULL;
-    }
-    return cur->fd_table[fd];
+
+void check_address(const uint64_t* addr){
+	struct thread *t = thread_current(); // 변경사항
+	/* 포인터가 가리키는 주소가 유저영역의 주소인지 확인 */
+	/* what if the user provides an invalid pointer, a pointer to kernel memory, 
+	 * or a block partially in one of those regions */
+	/* 잘못된 접근인 경우, 프로세스 종료 */
+	if (!is_user_vaddr(addr) || addr == NULL || pml4_get_page(t->pml4, addr) == NULL)
+		exit(-1);
+} 
+
+int process_add_file(struct file *f){
+	struct thread *curr = thread_current();
+	struct file **curr_fd_table = curr->fd_table;
+	for (int idx = curr->fd_idx; idx < FDCOUNT_LIMIT; idx++){
+		if(curr_fd_table[idx] == NULL){
+			curr_fd_table[idx] = f;
+			curr->fd_idx = idx+1; // fd의 최대값 + 1
+			return curr->fd_idx;
+		}
+	}
+	return -1;
 }
 
-int add_file_to_fdt(struct file *file)
-{
-    struct thread *cur = thread_current();
-    struct file **fdt = cur->fd_table;
-
-    // Find open spot from the front
-    //  fd 위치가 제한 범위 넘지않고, fd table의 인덱스 위치와 일치한다면
-    while (cur->fd_idx < FDCOUNT_LIMIT && fdt[cur->fd_idx])
-    {
-        cur->fd_idx++;
-    }
-
-    // error - fd table full
-    if (cur->fd_idx >= FDCOUNT_LIMIT)
-        return -1;
-
-    fdt[cur->fd_idx] = file;
-    return cur->fd_idx;
+struct file *process_get_file (int fd){
+	if (fd < 0 || fd >= FDCOUNT_LIMIT)
+		return NULL;
+	struct file *f = thread_current()->fd_table[fd];
+	return f;
 }
 
-void remove_file_from_fdt(int fd)
-{
-    struct thread *cur = thread_current();
-
-    // error : invalid fd
-    if (fd < 0 || fd >= FDCOUNT_LIMIT)
-        return;
-
-    cur->fd_table[fd] = NULL;
+/* revove the file(corresponding to fd) from the FDT of current process */
+void process_close_file(int fd){
+	if (fd < 0 || fd > FDCOUNT_LIMIT)
+		return NULL;
+	thread_current()->fd_table[fd] = NULL;
 }

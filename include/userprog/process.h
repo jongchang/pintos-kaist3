@@ -11,7 +11,7 @@ void process_exit (void);
 void process_activate (struct thread *next);
 
 // Argument Passing
-void argument_stack(char **parse, int count, void **rsp);
+// void argument_stack(char **argv, int argc, struct intr_frame *if_);
 
 // System Call
 int process_add_file (struct file *f);
