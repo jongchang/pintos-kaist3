@@ -97,6 +97,7 @@ int process_add_file(struct file *f){
 			return curr->fd_idx;
 		}
 	}
+	curr->fd_idx = FDCOUNT_LIMIT;
 	return -1;
 }
 

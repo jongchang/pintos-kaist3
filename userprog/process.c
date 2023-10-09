@@ -18,6 +18,7 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "userprog/process.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -151,6 +152,11 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 	return true;
 }
 #endif
+
+struct dict_elem{
+	uintptr_t key;
+	uintptr_t value;
+};
 
 /* A thread function that copies parent's execution context.
  * Hint) parent->tf does not hold the userland context of the process.
