@@ -355,6 +355,8 @@ process_exit (void) {
 
 	palloc_free_multiple(curr->fd_table, FDT_PAGES);
 
+	file_close(curr->running);
+
 	process_cleanup ();
 
 	sema_up(&curr->wait_sema);
@@ -499,6 +501,9 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
+
+	t->running = file;
+	file_deny_write(file);
 
 	/* Read and verify executable header. - 실행 파일 헤더를 읽고 저장 */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -799,12 +804,12 @@ setup_stack (struct intr_frame *if_) {
 
 #endif /* VM */
 
-struct 
-thread * get_child(int pid) {
+struct
+thread * get_child(int pid){
 	struct thread *curr = thread_current(); // 부모 쓰레드
-	struct list *child_list = &curr->child_list; // 부모의 자식 리스트
+	struct list *curr_child_list = &curr->child_list; // 부모의 자식 리스트
 	struct list_elem *e;
-	for (e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)){
+	for (e = list_begin(curr_child_list); e != list_end(curr_child_list); e = list_next(e)){
 		struct thread *now = list_entry(e, struct thread, child_elem);
 		if (now->tid == pid)
 			return now;

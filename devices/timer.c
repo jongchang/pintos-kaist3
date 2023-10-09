@@ -70,7 +70,7 @@ timer_calibrate (void) {
 	printf ("%'"PRIu64" loops/s.\n", (uint64_t) loops_per_tick * TIMER_FREQ);
 }
 
-/* Returns the number of timer ticks since the OS booted. OS가 부팅된 이후의 타이머 틱 수를 반환합니다. */
+/* Returns the number of timer ticks since the OS booted. */
 int64_t
 timer_ticks (void) {
 	enum intr_level old_level = intr_disable ();
@@ -87,14 +87,18 @@ timer_elapsed (int64_t then) {
 	return timer_ticks () - then;
 }
 
-/* Suspends execution for approximately TICKS timer ticks. 대략적으로 TICK 타이머 틱에 대한 실행을 일시 중단합니다 */
+/* Suspends execution for approximately TICKS timer ticks. */
 void
 timer_sleep (int64_t ticks) {
-	int64_t wake_tick = timer_ticks() + ticks; // 현재 시간 + 잠든 시간 => 일어나야 하는 시간
+	int64_t start = timer_ticks (); // current time (in ticks : 1ms)
 
 	ASSERT (intr_get_level () == INTR_ON);
-	
-	thread_sleep(wake_tick);
+	/* busy waiting */
+	// while (timer_elapsed (start) < ticks)
+	// 	thread_yield ();
+	/* sleep & awake */
+	// if (timer_elapsed(start) < ticks)
+	thread_sleep(start+ticks); // alarm-multiple 관련 변경 // current time + ticks(required) = time to be awaken => local ticks
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -122,24 +126,24 @@ timer_print_stats (void) {
 }
 
 /* Timer interrupt handler. */
+/* 이후 프로젝트에서 에러시 timer_ticks() -> ticks 변경 ? */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
-	thread_tick();
-
-	// mlfqs
-	if(thread_mlfqs) {
-		mlfqs_increment_recent_cpu();
-		if (ticks % 4 == 0) {
-			mlfqs_recalculate_priority();
-			if(ticks % TIMER_FREQ == 0) {
-				mlfqs_recalculate_recent_cpu();
-				mlfqs_calculate_load_avg();
+	thread_tick ();
+	if (thread_mlfqs){ // mlfqs 관련 변경
+		mlfqs_increment();
+		if (timer_ticks() % 4 == 0){
+			mlfqs_priority(thread_current());
+			if (timer_ticks() % TIMER_FREQ == 0){
+				mlfqs_load_avg();
+				mlfqs_recalc();
 			}
 		}
 	}
-	
-	thread_wake(ticks);
+	/* per every tick(1ms), check if there are any threads to be awaken */
+	if(get_next_tick_to_awake() <= ticks) // if the first candidate of sleep list needds to be awaken (== if there's at least 1 thread to be awaken)
+		thread_awake(ticks); // alarm-multiple 관련 변경 // by calling thread_awake(), check every threads in the sleep list and wakeup if necessary
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

@@ -1,29 +1,15 @@
 #ifndef THREADS_THREAD_H
 #define THREADS_THREAD_H
 
-// mlfqs
-#define PRI_MAX 63               
-#define NICE_DEFAULT 0
-#define RECENT_CPU_DEFAULT 0
-#define LOAD_AVG_DEFAULT 0
-
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
-
-// System Call
-#include "threads/synch.h"
-
-#define FDT_PAGES 3
-#define FDCOUNT_LIMIT FDT_PAGES * (1<<9)
-
+#include "threads/synch.h" // 추가
 #ifdef VM
 #include "vm/vm.h"
 #endif
 
-// mlfqs
-static struct list all_list;
 
 /* States in a thread's life cycle. */
 enum thread_status {
@@ -38,9 +24,9 @@ enum thread_status {
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
-/* Thread priorities. 쓰레드 우선순위 */
+/* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
-#define PRI_DEFAULT 31                  /* Default priority. 기본 쓰레드 우선순위 값 */
+#define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
 /* A kernel thread or user process.
@@ -106,43 +92,19 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
-	int64_t wakeup_tick;				/* 일어날 시간 추가 */
-
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
+	struct list_elem all_elem;          /* List element for all_list */ // mlfqs 관련 변경
+	int64_t wakeup_tick;                /* Local ticks (minimum ticks required before awakened )  */ /* alarm-multiple 관련 변경 */
 
-	/* priority-donate */
-	int init_priority; // 우선순위를 받았다가 다시 반납할 경우, 기존 우선순위로 복원할 값을 저장 변수.
-    
-    struct lock *wait_on_lock; // 쓰레드가 curr가 되기 위해 기다리고 있는 lock
-    struct list donations; // 우선순위를 준 쓰레드들을 담은 리스트
-    struct list_elem donation_elem; // 도네이션들의 요소
-
-	// mlfqs
-	int nice;
-	int recent_cpu;
-	struct list_elem allelem;
-
-	// System Call
-	int exit_status;
-	struct file **fdt[128];
-	int next_fd;
-
-	struct list child_list;             /* 자식 프로세스를 담아줄 리스트*/ //변경사항
-	struct list_elem child_elem;		/* child_list 에 담아줄 elem */ // 변경사항
-
-	struct semaphore wait_sema;			/* wait_sema 를 이용하여 자식 프로세스가 종료할때까지 대기함. 종료 상태를 저장 */
-
-	struct intr_frame parent_if;         /* 유저 스택의 정보를 인터럽트 프레임 안에 넣어서, 커널 스택으로 넘겨주기 위함 */ //변경사항 - 자식에게 넘겨줄 intr_frame
-	struct semaphore fork_sema;          /* 자식 프로세스를 정상적으로 로드하기 위해, 부모 프로세스가 sema_down/up하게 되는 세마포어 */ //fork가 완료될때 까지 부모가 기다리게 하는 forksema
-	struct semaphore free_sema;			 /*자식 프로세스 종료상태를 부모가 받을때까지 종료를 대기하게 하는 free_sema */
-
-	// 변경사항
-	/* file descriptor 관련 추가 */
-	struct file **fd_table;             /* File Descriptor Table (FD Table) */
-	int fd_idx;  
-
-	struct file *running;
+	/* donation 관련 */
+	int init_priority;                  /* default priority (to initialize after return donated priority) */ // priority-donate 관련 변경
+	struct lock *wait_on_lock;          /* Address of lock that this thread is waiting for */ // priority-donate 관련 변경
+	struct list donations;              /* donors list (multiple donation) */ //priority-donate 관련 변경
+	struct list_elem donation_elem;     /* multiple donation case */ //priority-donate 관련 변경
+	/* advanced */
+	int nice;                           /* nice value of thread */// mlfqs 관련 변경
+	int recent_cpu;                     /* recent_cpu which estimates how much CPU time earned recently */// mlfqs 관련 변경
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -156,6 +118,29 @@ struct thread {
 	/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */
+
+	struct list child_list;             /* 자식 프로세스를 담아줄 리스트*/ //변경사항
+	struct list_elem child_elem;		/* child_list 에 담아줄 elem */ // 변경사항
+
+	struct semaphore wait_sema;			/* wait_sema 를 이용하여 자식 프로세스가 종료할때까지 대기함. 종료 상태를 저장 */
+	int exit_status;                    /* system call : exit , wait */ //변경사항
+
+	struct intr_frame parent_if;         /* 유저 스택의 정보를 인터럽트 프레임 안에 넣어서, 커널 스택으로 넘겨주기 위함 */ //변경사항 - 자식에게 넘겨줄 intr_frame
+	struct semaphore fork_sema;          /* 자식 프로세스를 정상적으로 로드하기 위해, 부모 프로세스가 sema_down/up하게 되는 세마포어 */ //fork가 완료될때 까지 부모가 기다리게 하는 forksema
+	struct semaphore free_sema;			 /*자식 프로세스 종료상태를 부모가 받을때까지 종료를 대기하게 하는 free_sema */
+	
+	// 변경사항
+	/* file descriptor 관련 추가 */
+	struct file **fd_table;             /* File Descriptor Table (FD Table) */
+	int fd_idx;                          /* File Descriptor Index (FD Idx) */
+
+	/* project 2 extra */
+    int stdin_count;
+    int stdout_count;
+
+    // /* 현재 실행 중인 파일 */
+    struct file *running;                 //denying writes to executable
+	
 };
 
 /* If false (default), use round-robin scheduler.
@@ -181,8 +166,6 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
-void thread_sleep (int64_t ticks);
-void thread_wake(int64_t ticks);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
@@ -194,32 +177,31 @@ int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
 
-// 일어날 시간이 이른 스레드가 앞부분에 위치하도록 정렬할 때 사용할 정렬 함수를 새로 선언한다.
-void sort_thread_ticks();
+/* alarm-multiple 관련 변경 */
+void thread_sleep(int64_t ticks); 
+void thread_awake(int64_t ticks);
+void update_next_tick_to_awake(int64_t ticks);
+int64_t get_next_tick_to_awake(void);
 
-// 두 스레드의 wakeup_ticks를 비교해서 작으면 true를 반환하는 함수
-bool cmp_thread_ticks(struct list_elem *a_ ,struct list_elem *b_, void *aux UNUSED);
+/* alarm-priority, priority-fifo/preempt 관련 변경 */
+void check_curr_max_priority(void);
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
-// running 쓰레드와 ready_list의 쓰레드 중 가장 높은 우선 순위를 비교해서 스케줄링한다.
-void thread_test_preemption (void);
+/* priority-donate 관련 변경 */
+void donate_priority(void);
+void remove_donors_on_released_lock(struct lock *lock);
+void refresh_priority(void);
+bool cmp_donation_priority(const struct list_elem *a, const struct list_elem *b, void *aux);
 
-// 인자로 주어진 쓰레드들의 우선순위를 비교한다.
-bool thread_compare_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+/* mlfqs 관련 변경 */
+void mlfqs_priority (struct thread *t); 
+void mlfqs_recent_cpu (struct thread *t); 
+void mlfqs_load_avg (void);
+void mlfqs_increment (void);
+void mlfqs_recalc(void);
 
-bool thread_compare_donate_priority (const struct list_elem *l, const struct list_elem *s, void *aux UNUSED);
-
-void donate_priority (void);
-
-void remove_with_lock (struct lock *lock);
-
-void refresh_priority (void);
-
-// mlfqs
-void mlfqs_calculate_priority (struct thread *t);
-void mlfqs_calculate_recent_cpu (struct thread *t);
-void mlfqs_calculate_load_avg (void);
-void mlfqs_increment_recent_cpu (void);
-void mlfds_recalculate_recent_cpu (void);
-void mlfqs_recalculate_priority (void);
+/* Project 2 : FD(File Descriptor) 관련 변경 */
+#define FDT_PAGES 3
+#define FDCOUNT_LIMIT FDT_PAGES * (1<<9)
 
 #endif /* threads/thread.h */
